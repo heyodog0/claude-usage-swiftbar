@@ -12,7 +12,7 @@ Designed to degrade, never break. If the menu bar shows "⚠ est", the live
 endpoint was unreachable; open Claude Code once to refresh your token, or
 check the CONFIG block below if Anthropic changed the API.
 """
-import json, os, glob, time, subprocess, urllib.request, urllib.error
+import json, os, glob, time, subprocess, random, urllib.request, urllib.error
 from datetime import datetime, timezone
 
 # ─────────────────────────── CONFIG (edit here if API changes) ──────────────
@@ -25,8 +25,14 @@ CREDS_FILE     = os.path.expanduser("~/.claude/.credentials.json")
 CACHE_FILE     = os.path.expanduser("~/.swiftbar-plugins/.claude-usage-cache.json")
 CLAUDE_DIR     = os.path.expanduser("~/.claude/projects")
 HTTP_TIMEOUT   = 6
-WARN_PCT       = 70   # yellow at/above this
-CRIT_PCT       = 90   # red at/above this
+WARN_PCT       = 70    # orange at/above this
+CRIT_PCT       = 90    # red at/above this
+# Rate-limit hygiene: the menu bar refreshes every minute, but we only actually
+# CALL the endpoint when the cache is older than FETCH_TTL. On a 429 we back off
+# for BACKOFF_429 (or the server's Retry-After) and keep serving cached numbers.
+FETCH_TTL      = 600   # seconds between real fetches (10 min → ~6 calls/hour)
+FETCH_JITTER   = 90    # ± random seconds so we don't sync with Claude Code's calls
+BACKOFF_429    = 1800  # seconds to wait after a 429 (30 min) if no Retry-After
 # ────────────────────────────────────────────────────────────────────────────
 
 # ===== token loading (file first, then keychain) =============================
@@ -200,8 +206,9 @@ def fmt_tok(n):
 
 # ===== cache =================================================================
 def save_cache(d):
+    # NB: caller sets d["_ts"] only on a SUCCESSFUL fetch. Persisting a backoff
+    # must preserve the original _ts so "updated Xm ago" stays truthful.
     try:
-        d["_ts"] = time.time()
         with open(CACHE_FILE, "w") as fh:
             json.dump(d, fh)
     except OSError:
@@ -236,63 +243,98 @@ def mini_bar(p):
     filled = int(round(max(0.0, min(100.0, p)) / 100.0 * BAR_SEGMENTS))
     return "▰" * filled + "▱" * (BAR_SEGMENTS - filled)
 
+def normalize(live):
+    """Flatten the /usage response into the cache shape we render from."""
+    five_u, five_r = window(live.get("five_hour"))
+    week_u, week_r = window(live.get("seven_day"))
+    opus_u, opus_r = window(live.get("seven_day_opus"))
+    extra = {}
+    for k, v in live.items():
+        if k in ("five_hour", "seven_day", "seven_day_opus"):
+            continue
+        u, r = window(v)
+        if u is not None:
+            extra[k] = [u, r]
+    return {"five": five_u, "five_r": five_r, "week": week_u, "week_r": week_r,
+            "opus": opus_u, "opus_r": opus_r, "extra": extra}
+
+def get_data():
+    """Return (data, fetched_now, err). Only calls the API when the cache is
+    stale AND we're not in a 429 backoff window. Otherwise serves cache."""
+    cache = load_cache() or {}
+    now = time.time()
+    age = now - cache.get("_ts", 0)
+    have_cache = cache.get("five") is not None or cache.get("week") is not None
+    ttl = FETCH_TTL + random.uniform(-FETCH_JITTER, FETCH_JITTER)
+
+    # Respect any active backoff, and skip fetch if cache is still fresh.
+    if now < cache.get("backoff_until", 0) or (have_cache and age < ttl):
+        return cache, False, None
+
+    try:
+        data = normalize(fetch_live())
+        data["_ts"] = now
+        data["backoff_until"] = 0
+        save_cache(data)
+        return data, True, None
+    except urllib.error.HTTPError as e:
+        if e.code == 429:
+            ra = e.headers.get("Retry-After") if e.headers else None
+            try:
+                wait = float(ra)
+            except (TypeError, ValueError):
+                wait = BACKOFF_429
+            cache["backoff_until"] = now + max(wait, 60)
+            save_cache(cache)  # keep last-good values, just delay next fetch
+            return cache, False, f"429 (backing off {int(max(wait,60)/60)}m)"
+        cache["_err"] = str(e)
+        return cache, False, str(e)
+    except Exception as e:
+        return cache, False, str(e)
+
 # ===== render ================================================================
 def main():
-    live = None
-    err = None
-    try:
-        live = fetch_live()
-    except Exception as e:
-        err = str(e)
+    data, fetched, err = get_data()
+    have = data.get("five") is not None or data.get("week") is not None
 
-    if live:
-        five_u, five_r = window(live.get("five_hour"))
-        week_u, week_r = window(live.get("seven_day"))
-        opus_u, opus_r = window(live.get("seven_day_opus"))
-        save_cache({"five": five_u, "five_r": five_r, "week": week_u,
-                    "week_r": week_r, "opus": opus_u, "opus_r": opus_r})
+    if have:
+        five_u, five_r = data.get("five"), data.get("five_r")
+        week_u, week_r = data.get("week"), data.get("week_r")
+        opus_u, opus_r = data.get("opus"), data.get("opus_r")
 
-        # Headline = the binding constraint (whichever window is closest to its limit)
         headline_pct = max([x for x in (five_u, week_u) if x is not None] or [0])
-        title = f"{mini_bar(headline_pct)} {headline_pct:.0f}%"
-        print(f"{title} | font=Menlo size=13{title_color(headline_pct)}")
+        print(f"{mini_bar(headline_pct)} {headline_pct:.0f}% | font=Menlo size=13{title_color(headline_pct)}")
         print("---")
-        print("Claude plan limits (live) | size=11 color=gray")
+        age_m = int((time.time() - data.get("_ts", 0)) / 60)
+        freshness = "live" if fetched else f"updated {age_m}m ago"
+        print(f"Claude plan limits ({freshness}) | size=11 color=gray")
         if five_u is not None:
             print(f"5-hour window:  {five_u:5.1f}%   {reset_str(five_r)} | font=Menlo{color_for(five_u)}")
         if week_u is not None:
             print(f"Weekly (all):   {week_u:5.1f}%   {reset_str(week_r)} | font=Menlo{color_for(week_u)}")
         if opus_u is not None:
             print(f"Weekly (Opus):  {opus_u:5.1f}%   {reset_str(opus_r)} | font=Menlo{color_for(opus_u)}")
-        # also show any other *_day windows we didn't name explicitly
-        for k, v in live.items():
-            if k in ("five_hour", "seven_day", "seven_day_opus"):
-                continue
-            u, r = window(v)
-            if u is not None:
-                print(f"{k:<14} {u:5.1f}%   {reset_str(r)} | font=Menlo{color_for(u)}")
+        for k, (u, r) in (data.get("extra") or {}).items():
+            print(f"{k:<14} {u:5.1f}%   {reset_str(r)} | font=Menlo{color_for(u)}")
+        if err and "429" in err:
+            print(f"(rate-limited — {err}; showing cached) | size=10 color=gray")
     else:
-        # ── fallback ──────────────────────────────────────────────────────
-        cache = load_cache()
+        # No usable cache yet → local estimate.
         block_tok, block_cost = estimate_local()
         print(f"▱▱▱▱▱ ⚠ ~${block_cost:.0f} | font=Menlo size=13")
         print("---")
         print("⚠ Live plan limits unavailable | size=11 color=orange")
-        print(f"Reason: {err or 'unknown'} | size=10 color=gray")
-        print(f"Showing local estimate instead | size=10 color=gray")
+        print(f"Reason: {err or 'no data yet'} | size=10 color=gray")
+        print("Showing local estimate instead | size=10 color=gray")
         print("---")
         print(f"Last 5h (est): {fmt_tok(block_tok)} tok · ≈${block_cost:.2f} | font=Menlo")
-        if cache and cache.get("five") is not None:
-            age = int((time.time() - cache.get("_ts", 0)) / 60)
-            print("---")
-            print(f"Last known live ({age}m ago) | size=11 color=gray")
-            print(f"  5h {cache['five']:.0f}%  ·  7d {cache.get('week') or 0:.0f}% | font=Menlo")
         print("---")
         print("Tip: open Claude Code once to refresh token | size=10 color=gray")
 
     print("---")
+    print("Force refresh now | bash='/bin/rm' param1=-f param2=" + CACHE_FILE + " terminal=false refresh=true")
     print("Open /usage in Claude Code for official view | size=10 color=gray")
-    print("Refresh | refresh=true")
+    print("Refresh display | refresh=true")
 
 if __name__ == "__main__":
     main()

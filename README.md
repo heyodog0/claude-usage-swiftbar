@@ -29,10 +29,15 @@ Calls the same endpoint Claude Code's `/usage` uses
 Code already stores in your Keychain. **The token never leaves your machine**
 except in the request to Anthropic's own API — no secrets in this repo.
 
+**Easy on the endpoint.** Although the menu bar refreshes every minute, it only
+*calls* the API every ~10 min (cached in between), and on a `429` it honors
+`Retry-After` and backs off ~30 min while still showing the last good numbers —
+so you won't hammer the rate limit. Tune with `FETCH_TTL` / `BACKOFF_429`.
+
 It's an **unofficial endpoint**, so it's built to degrade, not break: if the
-live call fails (expired token, API change, offline), it falls back to a local
-token estimate marked `⚠` and shows the last good reading from cache. The
-endpoint, headers, and color thresholds are `CONFIG` constants at the top of
+live call fails (expired token, API change, offline) and there's no cached
+value yet, it falls back to a local token estimate marked `⚠`. The endpoint,
+headers, cadence, and color thresholds are all `CONFIG` constants at the top of
 `claude-usage.1m.py`.
 
 ## Tweak
