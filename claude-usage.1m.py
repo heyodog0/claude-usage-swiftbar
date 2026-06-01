@@ -214,10 +214,19 @@ def load_cache():
         return None
 
 def color_for(p):
+    """Dropdown rows: full green/orange/red (readable on the solid popover)."""
     if p is None: return ""
     if p >= CRIT_PCT: return " color=red"
     if p >= WARN_PCT: return " color=orange"
     return " color=green"
+
+def title_color(p):
+    """Menu-bar title: default color until it matters, then alert.
+    Default = max contrast on the translucent menu bar (adapts light/dark)."""
+    if p is None: return ""
+    if p >= CRIT_PCT: return " color=red"
+    if p >= WARN_PCT: return " color=orange"
+    return ""
 
 BAR_SEGMENTS = 5
 def mini_bar(p):
@@ -246,7 +255,7 @@ def main():
         # Headline = the binding constraint (whichever window is closest to its limit)
         headline_pct = max([x for x in (five_u, week_u) if x is not None] or [0])
         title = f"{mini_bar(headline_pct)} {headline_pct:.0f}%"
-        print(f"{title} | font=Menlo size=13{color_for(headline_pct)}")
+        print(f"{title} | font=Menlo size=13{title_color(headline_pct)}")
         print("---")
         print("Claude plan limits (live) | size=11 color=gray")
         if five_u is not None:
@@ -266,7 +275,7 @@ def main():
         # ── fallback ──────────────────────────────────────────────────────
         cache = load_cache()
         block_tok, block_cost = estimate_local()
-        print(f"▱▱▱▱▱ ⚠ ~${block_cost:.0f} | font=Menlo size=13 color=gray")
+        print(f"▱▱▱▱▱ ⚠ ~${block_cost:.0f} | font=Menlo size=13")
         print("---")
         print("⚠ Live plan limits unavailable | size=11 color=orange")
         print(f"Reason: {err or 'unknown'} | size=10 color=gray")
