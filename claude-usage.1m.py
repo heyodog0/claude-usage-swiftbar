@@ -302,7 +302,8 @@ def main():
         week_u, week_r = data.get("week"), data.get("week_r")
         opus_u, opus_r = data.get("opus"), data.get("opus_r")
 
-        headline_pct = max([x for x in (five_u, week_u) if x is not None] or [0])
+        # Menu bar shows only the 5-hour window; weekly lives in the dropdown.
+        headline_pct = five_u if five_u is not None else (week_u or 0)
         print(f"{mini_bar(headline_pct)} {headline_pct:.0f}% | font=Menlo size=13{title_color(headline_pct)}")
         print("---")
         age_m = int((time.time() - data.get("_ts", 0)) / 60)
