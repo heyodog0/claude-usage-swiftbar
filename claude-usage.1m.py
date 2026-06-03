@@ -12,6 +12,12 @@ Designed to degrade, never break. If the menu bar shows "⚠ est", the live
 endpoint was unreachable; open Claude Code once to refresh your token, or
 check the CONFIG block below if Anthropic changed the API.
 """
+# SwiftBar metadata — hide SwiftBar's built-in footer for a clean, plain menu:
+# <swiftbar.hideAbout>true</swiftbar.hideAbout>
+# <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
+# <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
+# <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
+# <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 import json, os, glob, time, subprocess, random, urllib.request, urllib.error
 from datetime import datetime, timezone
 
