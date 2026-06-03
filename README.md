@@ -9,7 +9,9 @@ rate-limit numbers as `/usage`, without opening anything.
 
 The bar fills as you approach your limit and turns **orange at 70%**, **red at
 90%** (otherwise it's the normal menu-bar color, for readability). Click it for
-the full breakdown: 5-hour, weekly, weekly-Opus, and resets.
+the full breakdown: 5-hour, weekly, weekly-Opus, resets, a **trend sparkline**
+of recent 5-hour usage, and a **time-to-cap projection** ("~24m to 5h cap at
+current rate") computed from your burn rate.
 
 ## Install
 

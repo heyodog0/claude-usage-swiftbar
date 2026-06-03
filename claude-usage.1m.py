@@ -33,6 +33,9 @@ CRIT_PCT       = 90    # red at/above this
 FETCH_TTL      = 600   # seconds between real fetches (10 min → ~6 calls/hour)
 FETCH_JITTER   = 90    # ± random seconds so we don't sync with Claude Code's calls
 BACKOFF_429    = 1800  # seconds to wait after a 429 (30 min) if no Retry-After
+# Trend + projection (a small 5-hour-utilization history kept in the cache):
+HISTORY_MAX    = 48    # samples to keep (~one per fetch, so ~8h at 10-min TTL)
+PROJ_WINDOW    = 5400  # seconds of recent history used to estimate burn rate (90 min)
 # ────────────────────────────────────────────────────────────────────────────
 
 # ===== token loading (file first, then keychain) =============================
@@ -275,6 +278,11 @@ def get_data():
         data = normalize(fetch_live())
         data["_ts"] = now
         data["backoff_until"] = 0
+        # Carry the trend history forward and append this sample.
+        hist = cache.get("history", [])
+        if data.get("five") is not None:
+            hist = (hist + [[now, round(data["five"], 1)]])[-HISTORY_MAX:]
+        data["history"] = hist
         save_cache(data)
         return data, True, None
     except urllib.error.HTTPError as e:
@@ -291,6 +299,61 @@ def get_data():
         return cache, False, str(e)
     except Exception as e:
         return cache, False, str(e)
+
+# ===== trend + projection ====================================================
+SPARK = "▁▂▃▄▅▆▇█"
+def sparkline(history):
+    """Fixed 0-100% sparkline of the 5h-utilization samples."""
+    vals = [u for _, u in history if u is not None]
+    if not vals:
+        return ""
+    out = ""
+    for v in vals:
+        v = max(0.0, min(100.0, v))
+        out += SPARK[int(v / 100.0 * (len(SPARK) - 1))]
+    return out
+
+def fmt_dur(secs):
+    secs = int(max(0, secs))
+    h, m = secs // 3600, (secs % 3600) // 60
+    return f"{h}h{m:02d}m" if h else f"{m}m"
+
+def project(history, current, reset_iso):
+    """Estimate time-to-5h-cap from recent burn rate. Returns a display string.
+    Compares against the window reset so we don't warn about a cap you'll
+    never reach before the window clears."""
+    pts = [(t, u) for t, u in (history or []) if u is not None]
+    if len(pts) < 2:
+        return None, "gathering trend… (a few more samples)"
+    now = time.time()
+    recent = [p for p in pts if now - p[0] <= PROJ_WINDOW]
+    if len(recent) < 2:
+        recent = pts[-2:]
+    (t0, u0), (t1, u1) = recent[0], recent[-1]
+    dt = t1 - t0
+    if dt <= 0:
+        return None, None
+    rate = (u1 - u0) / dt  # %/sec
+    if current is None:
+        current = u1
+    if rate <= 0:
+        return None, "5h usage steady — not climbing"
+    secs_to_cap = (100.0 - current) / rate
+    # how long until the window resets on its own?
+    secs_to_reset = None
+    if reset_iso:
+        try:
+            if isinstance(reset_iso, (int, float)):
+                rt = reset_iso / (1000.0 if reset_iso > 1e12 else 1.0)
+            else:
+                rt = datetime.fromisoformat(str(reset_iso).replace("Z", "+00:00")).timestamp()
+            secs_to_reset = rt - now
+        except Exception:
+            secs_to_reset = None
+    if secs_to_reset is not None and secs_to_cap > secs_to_reset:
+        return None, f"resets in {fmt_dur(secs_to_reset)} before cap — you're fine"
+    crit = secs_to_cap <= 1800  # < 30 min
+    return crit, f"~{fmt_dur(secs_to_cap)} to 5h cap at current rate"
 
 # ===== render ================================================================
 def main():
@@ -311,6 +374,12 @@ def main():
         print(f"Claude plan limits ({freshness}) | size=11 color=gray")
         if five_u is not None:
             print(f"5-hour window:  {five_u:5.1f}%   {reset_str(five_r)} | font=Menlo{color_for(five_u)}")
+            spark = sparkline(data.get("history", []))
+            if spark:
+                print(f"  trend (recent): {spark} | font=Menlo size=12")
+            crit, proj = project(data.get("history", []), five_u, five_r)
+            if proj:
+                print(f"  {proj} | font=Menlo size=11{' color=orange' if crit else ' color=gray'}")
         if week_u is not None:
             print(f"Weekly (all):   {week_u:5.1f}%   {reset_str(week_r)} | font=Menlo{color_for(week_u)}")
         if opus_u is not None:
