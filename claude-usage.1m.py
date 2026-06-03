@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/homebrew/bin/python3
 """
 SwiftBar plugin: Claude plan usage at a glance.
 
@@ -263,13 +263,79 @@ def title_color(p):
     if p >= WARN_PCT: return " color=orange"
     return ""
 
-BAR_SEGMENTS = 5
-def mini_bar(p):
-    """Render a unicode mini progress bar for a 0-100 percentage."""
-    if p is None:
-        return "▱" * BAR_SEGMENTS
-    filled = int(round(max(0.0, min(100.0, p)) / 100.0 * BAR_SEGMENTS))
-    return "▰" * filled + "▱" * (BAR_SEGMENTS - filled)
+# ===== menu-bar ring icon ====================================================
+RING_FONT = "/System/Library/Fonts/SFNSRounded.ttf"
+TRACK_COL = (142, 142, 148, 120)   # unfilled ring (colored warn/crit state)
+
+def _ring_font(size):
+    """SF Rounded at the heaviest named weight available (falls back gracefully)."""
+    f = ImageFont.truetype(RING_FONT, size)
+    for name in ("Heavy", "Bold", "Semibold"):
+        try:
+            f.set_variation_by_name(name); break
+        except Exception:
+            pass
+    return f
+
+def ring_icon(p, pt=23, dpi=144, ss=4):
+    """Render the menu-bar gauge. Returns (base64_png, swiftbar_key) or None.
+
+    Normal state → a TEMPLATE image (`swiftbar_key == "templateImage"`): drawn
+    in black with graded alpha, so macOS tints it to match the menu bar exactly
+    like native items — black over a light wallpaper, white over a dark one.
+    Warn/crit → a COLOR image (`"image"`) in orange/red, which reads on any
+    background and makes the alert pop.
+
+    Sizing: the PNG carries a `dpi` hint so SwiftBar/NSImage displays it at
+    `pt` points tall while the pixel buffer stays 2× for retina sharpness."""
+    out_px = max(8, int(round(pt * dpi / 72.0)))
+    global ImageFont
+    try:
+        import base64, io
+        from PIL import Image, ImageDraw, ImageFont
+    except Exception:
+        return None
+    try:
+        p = max(0.0, min(100.0, float(p)))
+        template = p < WARN_PCT
+        if   p >= CRIT_PCT: arc_col, track = (255, 59, 48, 255), TRACK_COL   # red
+        elif p >= WARN_PCT: arc_col, track = (255, 149, 0, 255), TRACK_COL   # orange
+        else:               arc_col, track = (0, 0, 0, 255), (0, 0, 0, 65)   # template (tinted by macOS)
+        W = out_px * ss
+        img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        stroke = int(W * 0.10)                        # thinner ring → bigger hole
+        margin = stroke // 2 + ss
+        box = [margin, margin, W - margin, W - margin]
+        # Full-circle gauge, filling clockwise from 12 o'clock.
+        d.arc(box, 0, 360, fill=track, width=stroke)
+        if p > 0:
+            d.arc(box, -90, -90 + p / 100.0 * 360, fill=arc_col, width=stroke)
+        label = str(int(round(p)))
+        # Digits sized to sit INSIDE the hole (no overlap with the ring).
+        inner = (W - 2 * (margin + stroke)) * 0.90
+        if template:
+            # Same tint as the ring; the gap to the ring keeps them distinct.
+            num_fill, num_stroke, emb = (0, 0, 0, 255), None, 0
+        else:
+            # White with a dark halo so it reads on the colored arc / any bg.
+            num_fill, num_stroke, emb = (255, 255, 255, 255), (0, 0, 0, 170), max(1, round(W * 0.018))
+        fs, font = int(inner), None
+        while fs > 8:
+            font = _ring_font(fs)
+            l, t, r, b = d.textbbox((0, 0), label, font=font, stroke_width=emb)
+            if (r - l) <= inner and (b - t) <= inner:
+                break
+            fs -= 2
+        l, t, r, b = d.textbbox((0, 0), label, font=font, stroke_width=emb)
+        d.text((W / 2 - (l + r) / 2, W / 2 - (t + b) / 2), label, font=font,
+               fill=num_fill, stroke_width=emb, stroke_fill=num_stroke)
+        img = img.resize((out_px, out_px), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, "PNG", dpi=(dpi, dpi))  # dpi hint → displayed at `pt` points
+        return base64.b64encode(buf.getvalue()).decode(), ("templateImage" if template else "image")
+    except Exception:
+        return None
 
 def normalize(live):
     """Flatten the /usage response into the cache shape we render from."""
@@ -392,7 +458,12 @@ def main():
 
         # Menu bar shows only the 5-hour window; weekly lives in the dropdown.
         headline_pct = five_u if five_u is not None else (week_u or 0)
-        print(f"{mini_bar(headline_pct)} {headline_pct:.0f}% | font=Menlo size=13{title_color(headline_pct)}")
+        icon = ring_icon(headline_pct)
+        if icon:
+            b64, key = icon  # key is "templateImage" (adaptive) or "image" (colored)
+            print(f"| {key}={b64}")
+        else:  # Pillow missing / render failed → plain text, still informative
+            print(f"{headline_pct:.0f}% | font=Menlo size=13{title_color(headline_pct)}")
         print("---")
         age_m = int((time.time() - data.get("_ts", 0)) / 60)
         print(f"Plan limits · {'live' if fetched else f'{age_m}m ago'} | size=11 color=gray")
@@ -421,7 +492,7 @@ def main():
     else:
         # No usable cache yet → local estimate.
         block_tok, block_cost = estimate_local()
-        print(f"▱▱▱▱▱ ⚠ ~${block_cost:.0f} | font=Menlo size=13")
+        print(f"⚠ ~${block_cost:.0f} | font=Menlo size=13")
         print("---")
         print("Live limits unavailable · showing estimate | size=11 color=orange")
         print(f"Last 5h ≈ {fmt_tok(block_tok)} tok · ${block_cost:.2f} | font=Menlo size=13")
