@@ -140,6 +140,25 @@ def reset_str(r):
     h = int(delta // 3600); m = int((delta % 3600) // 60)
     return f"resets in {h}h{m:02d}m" if h else f"resets in {m}m"
 
+def reset_short(r):
+    """Compact reset string, with days for the weekly windows (e.g. '4d18h')."""
+    if not r:
+        return ""
+    try:
+        if isinstance(r, (int, float)):
+            ts = r / (1000.0 if r > 1e12 else 1.0)
+        else:
+            ts = datetime.fromisoformat(str(r).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return ""
+    delta = int(ts - time.time())
+    if delta <= 0:
+        return "now"
+    d, h, m = delta // 86400, (delta % 86400) // 3600, (delta % 3600) // 60
+    if d:
+        return f"{d}d{h}h"
+    return f"{h}h{m:02d}m" if h else f"{m}m"
+
 # ===== local-logs fallback estimate ==========================================
 PRICING = {"opus": {"in": 15.0, "out": 75.0}, "sonnet": {"in": 3.0, "out": 15.0},
            "haiku": {"in": 1.0, "out": 5.0}}
@@ -322,9 +341,11 @@ def project(history, current, reset_iso):
     """Estimate time-to-5h-cap from recent burn rate. Returns a display string.
     Compares against the window reset so we don't warn about a cap you'll
     never reach before the window clears."""
+    # Only speaks up when you're actually climbing toward the cap before the
+    # window resets; otherwise returns (None, None) so nothing is shown.
     pts = [(t, u) for t, u in (history or []) if u is not None]
     if len(pts) < 2:
-        return None, "gathering trend… (a few more samples)"
+        return None, None
     now = time.time()
     recent = [p for p in pts if now - p[0] <= PROJ_WINDOW]
     if len(recent) < 2:
@@ -337,9 +358,8 @@ def project(history, current, reset_iso):
     if current is None:
         current = u1
     if rate <= 0:
-        return None, "5h usage steady — not climbing"
+        return None, None  # steady / falling — stay quiet
     secs_to_cap = (100.0 - current) / rate
-    # how long until the window resets on its own?
     secs_to_reset = None
     if reset_iso:
         try:
@@ -351,9 +371,8 @@ def project(history, current, reset_iso):
         except Exception:
             secs_to_reset = None
     if secs_to_reset is not None and secs_to_cap > secs_to_reset:
-        return None, f"resets in {fmt_dur(secs_to_reset)} before cap — you're fine"
-    crit = secs_to_cap <= 1800  # < 30 min
-    return crit, f"~{fmt_dur(secs_to_cap)} to 5h cap at current rate"
+        return None, None  # window clears before you'd hit the cap — fine
+    return secs_to_cap <= 1800, f"~{fmt_dur(secs_to_cap)} to cap"
 
 # ===== render ================================================================
 def main():
@@ -370,41 +389,38 @@ def main():
         print(f"{mini_bar(headline_pct)} {headline_pct:.0f}% | font=Menlo size=13{title_color(headline_pct)}")
         print("---")
         age_m = int((time.time() - data.get("_ts", 0)) / 60)
-        freshness = "live" if fetched else f"updated {age_m}m ago"
-        print(f"Claude plan limits ({freshness}) | size=11 color=gray")
+        print(f"Plan limits · {'live' if fetched else f'{age_m}m ago'} | size=11 color=gray")
+
+        def row(label, u, r):
+            print(f"{label:<7}{u:>3.0f}%   {reset_short(r)} | font=Menlo size=13{color_for(u)}")
+
         if five_u is not None:
-            print(f"5-hour window:  {five_u:5.1f}%   {reset_str(five_r)} | font=Menlo{color_for(five_u)}")
-            spark = sparkline(data.get("history", []))
-            if spark:
-                print(f"  trend (recent): {spark} | font=Menlo size=12")
-            crit, proj = project(data.get("history", []), five_u, five_r)
+            row("5-hour", five_u, five_r)
+            hist = data.get("history", [])
+            spark = sparkline(hist)
+            if len(set(spark)) > 1:  # only when the trend actually moves
+                print(f"{'':7}{spark} | font=Menlo size=13 color=gray")
+            crit, proj = project(hist, five_u, five_r)
             if proj:
-                print(f"  {proj} | font=Menlo size=11{' color=orange' if crit else ' color=gray'}")
+                print(f"{'':7}{proj} | font=Menlo size=11{' color=orange' if crit else ' color=gray'}")
         if week_u is not None:
-            print(f"Weekly (all):   {week_u:5.1f}%   {reset_str(week_r)} | font=Menlo{color_for(week_u)}")
+            row("Weekly", week_u, week_r)
         if opus_u is not None:
-            print(f"Weekly (Opus):  {opus_u:5.1f}%   {reset_str(opus_r)} | font=Menlo{color_for(opus_u)}")
+            row("Opus", opus_u, opus_r)
         for k, (u, r) in (data.get("extra") or {}).items():
-            print(f"{k:<14} {u:5.1f}%   {reset_str(r)} | font=Menlo{color_for(u)}")
+            if u and u > 0:  # hide empty windows like seven_day_sonnet 0%
+                row(k.replace("seven_day_", "").replace("_", " ").title(), u, r)
         if err and "429" in err:
-            print(f"(rate-limited — {err}; showing cached) | size=10 color=gray")
+            print("rate-limited · showing cached | size=10 color=gray")
     else:
         # No usable cache yet → local estimate.
         block_tok, block_cost = estimate_local()
         print(f"▱▱▱▱▱ ⚠ ~${block_cost:.0f} | font=Menlo size=13")
         print("---")
-        print("⚠ Live plan limits unavailable | size=11 color=orange")
-        print(f"Reason: {err or 'no data yet'} | size=10 color=gray")
-        print("Showing local estimate instead | size=10 color=gray")
-        print("---")
-        print(f"Last 5h (est): {fmt_tok(block_tok)} tok · ≈${block_cost:.2f} | font=Menlo")
-        print("---")
-        print("Tip: open Claude Code once to refresh token | size=10 color=gray")
-
-    print("---")
-    print("Force refresh now | bash='/bin/rm' param1=-f param2=" + CACHE_FILE + " terminal=false refresh=true")
-    print("Open /usage in Claude Code for official view | size=10 color=gray")
-    print("Refresh display | refresh=true")
+        print("Live limits unavailable · showing estimate | size=11 color=orange")
+        print(f"Last 5h ≈ {fmt_tok(block_tok)} tok · ${block_cost:.2f} | font=Menlo size=13")
+        if err:
+            print(f"{err} | size=10 color=gray")
 
 if __name__ == "__main__":
     main()
