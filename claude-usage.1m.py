@@ -267,10 +267,11 @@ def title_color(p):
 RING_FONT = "/System/Library/Fonts/SFNSRounded.ttf"
 TRACK_COL = (142, 142, 148, 120)   # unfilled ring (colored warn/crit state)
 
+RING_WEIGHT = "Medium"   # SF Rounded weight for the digits (e.g. Light/Regular/Medium/Semibold)
 def _ring_font(size):
-    """SF Rounded at the heaviest named weight available (falls back gracefully)."""
+    """SF Rounded at RING_WEIGHT, falling back gracefully if unavailable."""
     f = ImageFont.truetype(RING_FONT, size)
-    for name in ("Heavy", "Bold", "Semibold"):
+    for name in (RING_WEIGHT, "Medium", "Regular"):
         try:
             f.set_variation_by_name(name); break
         except Exception:
