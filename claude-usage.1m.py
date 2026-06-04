@@ -270,6 +270,7 @@ TRACK_COL = (142, 142, 148, 120)   # unfilled ring (colored warn/crit state)
 RING_WEIGHT = "Medium"   # SF Rounded weight for the digits (e.g. Light/Regular/Medium/Semibold)
 def _ring_font(size):
     """SF Rounded at RING_WEIGHT, falling back gracefully if unavailable."""
+    from PIL import ImageFont
     f = ImageFont.truetype(RING_FONT, size)
     for name in (RING_WEIGHT, "Medium", "Regular"):
         try:
@@ -290,10 +291,9 @@ def ring_icon(p, pt=23, dpi=144, ss=4):
     Sizing: the PNG carries a `dpi` hint so SwiftBar/NSImage displays it at
     `pt` points tall while the pixel buffer stays 2× for retina sharpness."""
     out_px = max(8, int(round(pt * dpi / 72.0)))
-    global ImageFont
     try:
         import base64, io
-        from PIL import Image, ImageDraw, ImageFont
+        from PIL import Image, ImageDraw
     except Exception:
         return None
     try:
@@ -472,15 +472,9 @@ def main():
         def row(label, u, r):
             print(f"{label:<7}{u:>3.0f}%   {reset_short(r)} | font=Menlo size=13{color_for(u)}")
 
+        # Limit rows first: 5-hour, Weekly, Opus, then any extra windows.
         if five_u is not None:
             row("5-hour", five_u, five_r)
-            hist = data.get("history", [])
-            spark = sparkline(hist)
-            if len(set(spark)) > 1:  # only when the trend actually moves
-                print(f"{'':7}{spark} | font=Menlo size=13 color=gray")
-            crit, proj = project(hist, five_u, five_r)
-            if proj:
-                print(f"{'':7}{proj} | font=Menlo size=11{' color=orange' if crit else ' color=gray'}")
         if week_u is not None:
             row("Weekly", week_u, week_r)
         if opus_u is not None:
@@ -488,6 +482,18 @@ def main():
         for k, (u, r) in (data.get("extra") or {}).items():
             if u and u > 0:  # hide empty windows like seven_day_sonnet 0%
                 row(k.replace("seven_day_", "").replace("_", " ").title(), u, r)
+
+        # Trend at the bottom: the 5-hour sparkline + time-to-cap projection.
+        if five_u is not None:
+            hist = data.get("history", [])
+            spark = sparkline(hist)
+            crit, proj = project(hist, five_u, five_r)
+            if len(set(spark)) > 1 or proj:  # only when there's something to show
+                print("---")
+                if len(set(spark)) > 1:  # only when the trend actually moves
+                    print(f"5h trend  {spark} | font=Menlo size=13 color=gray")
+                if proj:
+                    print(f"{'':10}{proj} | font=Menlo size=11{' color=orange' if crit else ' color=gray'}")
         if err and "429" in err:
             print("rate-limited · showing cached | size=10 color=gray")
     else:
