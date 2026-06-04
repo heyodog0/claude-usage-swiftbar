@@ -27,6 +27,15 @@ else
   echo "• SwiftBar already installed."
 fi
 
+# 2b. Pillow — used to render the menu-bar ring icon (plugin runs on Homebrew's
+#     python3; without Pillow it falls back to a plain "NN%" text title).
+if /opt/homebrew/bin/python3 -c "import PIL" >/dev/null 2>&1; then
+  echo "• Pillow already installed."
+else
+  echo "• Installing Pillow…"
+  brew install pillow
+fi
+
 # 3. Link the plugin (symlink so `git pull` updates it instantly)
 mkdir -p "$PLUGIN_DIR"
 ln -sf "$REPO_DIR/$PLUGIN" "$PLUGIN_DIR/$PLUGIN"
@@ -47,8 +56,8 @@ cat <<'EOF'
 
 First run only: macOS will show a Keychain prompt asking to access
 "Claude Code-credentials" — click **Always Allow**. The menu bar will then
-show your live plan usage, e.g.  ▰▰▱▱▱ 42%
+show your live plan usage as a circular ring with the 5-hour % inside.
 
-If it shows "▱▱▱▱▱ ⚠", open Claude Code once to refresh your auth token,
+If it shows a "⚠" estimate, open Claude Code once to refresh your auth token,
 then click the menu-bar item → Refresh.
 EOF

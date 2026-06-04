@@ -3,15 +3,16 @@
 Live Claude Code plan usage in your macOS menu bar — the same 5-hour and weekly
 rate-limit numbers as `/usage`, without opening anything.
 
-```
-▰▰▱▱▱ 42%
-```
+A small **circular ring gauge** with the 5-hour utilization **% in the middle**.
+The ring fills clockwise as you approach your limit. In its normal state it's a
+**template image**, so macOS tints it to match the menu bar exactly like the
+native clock/battery icons — **black over a light wallpaper, white over a dark
+one**. At **70%** it turns **orange** and at **90%** **red** (drawn as a real
+colored icon so the alert reads on any background).
 
-The bar fills as you approach your limit and turns **orange at 70%**, **red at
-90%** (otherwise it's the normal menu-bar color, for readability). Click it for
-the full breakdown: 5-hour, weekly, weekly-Opus, resets, a **trend sparkline**
-of recent 5-hour usage, and a **time-to-cap projection** ("~24m to 5h cap at
-current rate") computed from your burn rate.
+Click it for the full breakdown: 5-hour, weekly, weekly-Opus, resets, a **trend
+sparkline** of recent 5-hour usage, and a **time-to-cap projection** ("~24m to
+5h cap at current rate") computed from your burn rate.
 
 ## Install
 
@@ -20,8 +21,8 @@ git clone https://github.com/heyodog0/claude-usage-swiftbar.git
 cd claude-usage-swiftbar && ./install.sh
 ```
 
-Installs SwiftBar (via [Homebrew](https://brew.sh)) if needed, links the plugin,
-and reloads. **First run:** macOS shows a Keychain prompt for
+Installs SwiftBar and Pillow (via [Homebrew](https://brew.sh)) if needed, links
+the plugin, and reloads. **First run:** macOS shows a Keychain prompt for
 `Claude Code-credentials` → click **Always Allow**. Requires Claude Code signed in.
 
 ## How it works
@@ -30,6 +31,11 @@ Calls the same endpoint Claude Code's `/usage` uses
 (`GET https://api.anthropic.com/api/oauth/usage`) with the OAuth token Claude
 Code already stores in your Keychain. **The token never leaves your machine**
 except in the request to Anthropic's own API — no secrets in this repo.
+
+The ring icon is drawn with **[Pillow](https://python-pillow.org)**, so the
+plugin runs on Homebrew's Python (the shebang is `#!/opt/homebrew/bin/python3`).
+If Pillow ever isn't available it **falls back to a plain `NN%` text title** —
+the numbers still show, just without the ring.
 
 **Easy on the endpoint.** Although the menu bar refreshes every minute, it only
 *calls* the API every ~10 min (cached in between), and on a `429` it honors
@@ -44,8 +50,11 @@ headers, cadence, and color thresholds are all `CONFIG` constants at the top of
 
 ## Tweak
 
-- Colors / bar width: `WARN_PCT`, `CRIT_PCT`, `BAR_SEGMENTS` in the `CONFIG` block.
-- Refresh rate: rename the file — `claude-usage.30s.py`, `claude-usage.5m.py`, etc.
+- **Warning colors:** `WARN_PCT` (orange) and `CRIT_PCT` (red) in the `CONFIG` block.
+- **Ring look:** the `ring_icon()` helper — `RING_WEIGHT` (digit weight, e.g.
+  Light/Regular/Medium/Semibold), `pt` (overall size), the `W * 0.10` stroke
+  width, and `TRACK_COL` (the unfilled-ring color).
+- **Refresh rate:** rename the file — `claude-usage.30s.py`, `claude-usage.5m.py`, etc.
 
 ## Sync across Macs
 
