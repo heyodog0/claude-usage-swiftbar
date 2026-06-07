@@ -469,8 +469,13 @@ def main():
         age_m = int((time.time() - data.get("_ts", 0)) / 60)
         print(f"Plan limits · {'live' if fetched else f'{age_m}m ago'} | size=11 color=gray")
 
+        row_w = 0  # widest limit-row text, used to bound the trend below
+
         def row(label, u, r):
-            print(f"{label:<7}{u:>3.0f}%   {reset_short(r)} | font=Menlo size=13{color_for(u)}")
+            nonlocal row_w
+            text = f"{label:<7}{u:>3.0f}%   {reset_short(r)}"
+            row_w = max(row_w, len(text))
+            print(f"{text} | font=Menlo size=13{color_for(u)}")
 
         # Limit rows first: 5-hour, Weekly, Opus, then any extra windows.
         if five_u is not None:
@@ -487,11 +492,15 @@ def main():
         if five_u is not None:
             hist = data.get("history", [])
             spark = sparkline(hist)
+            # Keep the trend no wider than the limit rows above it: drop the
+            # oldest samples so "5h trend  " + spark lines up with the rows.
+            label = "5h trend  "
+            spark = spark[-max(1, row_w - len(label)):] if spark else spark
             crit, proj = project(hist, five_u, five_r)
             if len(set(spark)) > 1 or proj:  # only when there's something to show
                 print("---")
                 if len(set(spark)) > 1:  # only when the trend actually moves
-                    print(f"5h trend  {spark} | font=Menlo size=13 color=gray")
+                    print(f"{label}{spark} | font=Menlo size=13 color=gray")
                 if proj:
                     print(f"{'':10}{proj} | font=Menlo size=11{' color=orange' if crit else ' color=gray'}")
         if err and "429" in err:
