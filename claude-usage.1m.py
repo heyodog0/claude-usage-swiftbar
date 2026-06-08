@@ -111,14 +111,19 @@ def fetch_live():
         return json.loads(r.read().decode())
 
 def pct(v):
-    """Normalize utilization that may be 0-1 or 0-100 into 0-100."""
+    """Utilization as a 0-100 percentage.
+
+    The endpoint reports utilization on a 0-100 scale (e.g. 35.0 == 35%),
+    so we pass it straight through. We deliberately do NOT rescale sub-1
+    values: a freshly-reset window reports ~1% (e.g. 1.0), and treating that
+    as the fraction 1.0 would render it as a bogus 100%."""
     if v is None:
         return None
     try:
         v = float(v)
     except (TypeError, ValueError):
         return None
-    return v * 100.0 if v <= 1.0 else v
+    return max(0.0, v)
 
 def window(d):
     """Extract (utilization%, resets_at) from a usage sub-object, tolerantly."""
@@ -164,6 +169,17 @@ def reset_short(r):
     if d:
         return f"{d}d{h}h"
     return f"{h}h{m:02d}m" if h else f"{m}m"
+
+def reset_ts(r):
+    """resets_at (ISO string or epoch in s/ms) → epoch seconds, or None."""
+    if not r:
+        return None
+    try:
+        if isinstance(r, (int, float)):
+            return r / (1000.0 if r > 1e12 else 1.0)
+        return datetime.fromisoformat(str(r).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
 
 # ===== local-logs fallback estimate ==========================================
 PRICING = {"opus": {"in": 15.0, "out": 75.0}, "sonnet": {"in": 3.0, "out": 15.0},
@@ -362,8 +378,20 @@ def get_data():
     have_cache = cache.get("five") is not None or cache.get("week") is not None
     ttl = FETCH_TTL + random.uniform(-FETCH_JITTER, FETCH_JITTER)
 
-    # Respect any active backoff, and skip fetch if cache is still fresh.
-    if now < cache.get("backoff_until", 0) or (have_cache and age < ttl):
+    # A window whose reset time has already passed is showing a pre-reset number
+    # that's now wrong (the fresh window starts near 0). A freshly-fetched cache
+    # always carries a future resets_at, so any cached reset in the past means it
+    # lapsed since we fetched — refetch even if the TTL hasn't elapsed.
+    reset_passed = have_cache and any(
+        (lambda ts: ts is not None and ts <= now)(reset_ts(cache.get(k)))
+        for k in ("five_r", "week_r", "opus_r")
+    )
+
+    # 429 backoff always wins (never hammer the endpoint). Otherwise serve cache
+    # only while it's fresh AND no tracked window has lapsed its reset.
+    if now < cache.get("backoff_until", 0):
+        return cache, False, None
+    if have_cache and age < ttl and not reset_passed:
         return cache, False, None
 
     try:
