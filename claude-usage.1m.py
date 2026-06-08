@@ -1,4 +1,8 @@
-#!/opt/homebrew/bin/python3
+#!/usr/bin/env -S uv run --script --quiet
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["pillow"]
+# ///
 """
 SwiftBar plugin: Claude plan usage at a glance.
 
